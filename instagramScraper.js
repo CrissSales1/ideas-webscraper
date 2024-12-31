@@ -1,7 +1,20 @@
 const puppeteer = require('puppeteer');
+const os = require('os');
 
 async function buscarDadosInstagram(hashtag, maxPosts = 10) {
-  const browser = await puppeteer.launch({ headless: true });
+  const isLinux = os.platform() === 'linux';
+  
+  const options = {
+    headless: "new",
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  };
+
+  // Adiciona o caminho do executável apenas no Linux
+  if (isLinux) {
+    options.executablePath = '/usr/bin/google-chrome-stable';
+  }
+
+  const browser = await puppeteer.launch(options);
   const page = await browser.newPage();
 
   const url = `https://www.instagram.com/explore/tags/${encodeURIComponent(hashtag)}/`;

@@ -1,11 +1,20 @@
 const puppeteer = require('puppeteer');
+const os = require('os');
 
 async function buscarVideos(keyword, maxVideos = 10) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    executablePath: '/usr/bin/google-chrome-stable',
-  });
+  const isLinux = os.platform() === 'linux';
+  
+  const options = {
+    headless: "new",
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  };
+
+  // Adiciona o caminho do executável apenas no Linux
+  if (isLinux) {
+    options.executablePath = '/usr/bin/google-chrome-stable';
+  }
+
+  const browser = await puppeteer.launch(options);
 
   const page = await browser.newPage();
 
@@ -15,16 +24,20 @@ async function buscarVideos(keyword, maxVideos = 10) {
   await page.waitForSelector('#video-title');
 
   const videos = await page.evaluate((maxVideos) => {
-    const videoElements = Array.from(document.querySelectorAll('#video-title')).slice(0, maxVideos);
-    const viewsElements = Array.from(document.querySelectorAll('#metadata-line span:nth-child(1)')).slice(0, maxVideos);
-    const thumbnailElements = Array.from(document.querySelectorAll('ytd-thumbnail img')).slice(0, maxVideos);
-
-    return videoElements.map((el, i) => ({
-      titulo: el.innerText.trim(),
-      link: el.href,
-      visualizacoes: viewsElements[i] ? viewsElements[i].innerText.trim() : 'N/A',
-      thumbnail: thumbnailElements[i] ? thumbnailElements[i].src : 'N/A',
-    }));
+    const videoElements = Array.from(document.querySelectorAll('ytd-video-renderer')).slice(0, maxVideos);
+    
+    return videoElements.map(videoEl => {
+      const titleEl = videoEl.querySelector('#video-title');
+      const viewsEl = videoEl.querySelector('#metadata-line span');
+      const thumbnailEl = videoEl.querySelector('#thumbnail img');
+      
+      return {
+        titulo: titleEl ? titleEl.innerText.trim() : 'N/A',
+        link: titleEl ? titleEl.href : 'N/A',
+        visualizacoes: viewsEl ? viewsEl.innerText.trim() : 'N/A',
+        thumbnail: thumbnailEl ? thumbnailEl.src : 'N/A'
+      };
+    });
   }, maxVideos);
 
   await browser.close();

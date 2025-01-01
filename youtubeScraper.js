@@ -122,13 +122,13 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
       return videoElements.map(videoEl => {
         try {
           const titleEl = videoEl.querySelector('#video-title');
-          const viewsEl = videoEl.querySelector('#metadata-line span');
+          const viewsEl = videoEl.querySelector('#metadata-line span:first-child');
           const thumbnailEl = videoEl.querySelector('#thumbnail img');
-          const channelEl = videoEl.querySelector('#channel-info a');
-          const durationEl = videoEl.querySelector('#text.ytd-thumbnail-overlay-time-status-renderer');
+          const channelEl = videoEl.querySelector('#channel-name a, #text-container a');
+          const durationEl = videoEl.querySelector('span.ytd-thumbnail-overlay-time-status-renderer');
           const publishedEl = videoEl.querySelector('#metadata-line span:last-child');
-          const descriptionEl = videoEl.querySelector('#description-text');
-          const badgeEl = videoEl.querySelector('#badges .badge-style-type-verified');
+          const descriptionEl = videoEl.querySelector('#description-text, #description');
+          const badgeEl = videoEl.querySelector('ytd-badge-supported-renderer');
           
           // Extrair hashtags do título
           const title = titleEl ? titleEl.innerText.trim() : 'N/A';
@@ -150,25 +150,34 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
             ).format('YYYY-MM-DD HH:mm:ss') : 
             null;
 
+          // Processar thumbnail
+          const thumbnailSrc = thumbnailEl ? 
+            (thumbnailEl.src.startsWith('data:') ? thumbnailEl.dataset.thumbnailUrl : thumbnailEl.src) : 
+            'N/A';
+
+          // Processar nome do canal
+          const channelName = channelEl ? channelEl.innerText.trim() : 
+            (videoEl.querySelector('#channel-name') ? videoEl.querySelector('#channel-name').innerText.trim() : 'N/A');
+
           return {
             titulo: title,
             link: titleEl ? titleEl.href : 'N/A',
             visualizacoes: viewsText,
             visualizacoesNumero: viewsNumber,
-            thumbnail: thumbnailEl ? thumbnailEl.src : 'N/A',
-            canal: channelEl ? {
-              nome: channelEl.innerText.trim(),
-              link: channelEl.href,
+            thumbnail: thumbnailSrc,
+            canal: {
+              nome: channelName,
+              link: channelEl ? channelEl.href : 'N/A',
               verificado: !!badgeEl
-            } : 'N/A',
+            },
             duracao: durationEl ? durationEl.innerText.trim() : 'N/A',
             publicadoEm: publishedDate,
             descricao: descriptionEl ? descriptionEl.innerText.trim() : 'N/A',
             hashtags: hashtags,
-            categoria: 'N/A', // Será preenchido ao visitar a página do vídeo
+            categoria: 'N/A',
             metricas: {
-              visualizacoesPorDia: 0, // Será calculado
-              engajamento: 0 // Será calculado
+              visualizacoesPorDia: 0,
+              engajamento: 0
             }
           };
         } catch (err) {
@@ -179,31 +188,72 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
     }, maxVideos);
 
     // Enriquecer dados visitando cada vídeo
-    for (let video of videos) {
+    for (let i = 0; i < videos.length; i++) {
+      const video = videos[i];
       try {
-        await page.goto(video.link, { waitUntil: 'networkidle2', timeout: 30000 });
+        console.log(`Coletando dados adicionais do vídeo ${i + 1}/${videos.length}: ${video.titulo}`);
+        
+        await page.goto(video.link, { 
+          waitUntil: 'networkidle2', 
+          timeout: process.env.RAILWAY_ENVIRONMENT === 'production' ? 45000 : 30000 
+        });
+        
+        // Aguardar elementos importantes
+        await page.waitForSelector('ytd-watch-metadata', { timeout: 10000 });
         
         const extraInfo = await page.evaluate(() => {
-          const likesEl = document.querySelector('#top-level-buttons-computed yt-formatted-string');
-          const commentsEl = document.querySelector('#comments #count');
-          const categoryEl = document.querySelector('ytd-metadata-row-container-renderer #content');
+          // Função helper para extrair números
+          const extractNumber = (text) => parseInt(text.replace(/[^0-9]/g, '')) || 0;
+          
+          // Coletar likes
+          const likesEl = document.querySelector('#top-level-buttons-computed ytd-toggle-button-renderer:first-child #text');
+          const likes = likesEl ? likesEl.innerText.trim() : 'N/A';
+          const likesNumber = likesEl ? extractNumber(likes) : 0;
+          
+          // Coletar comentários
+          const commentsEl = document.querySelector('#comments #count .count-text');
+          const comments = commentsEl ? commentsEl.innerText.trim() : 'N/A';
+          const commentsNumber = commentsEl ? extractNumber(comments) : 0;
+          
+          // Coletar descrição completa
+          const descriptionEl = document.querySelector('#description-inline-expander, #description');
+          const description = descriptionEl ? descriptionEl.innerText.trim() : 'N/A';
+          
+          // Coletar categoria
+          const categoryEl = document.querySelector('ytd-metadata-row-renderer:has(#title yt-formatted-string:contains("Categoria")) #content');
+          const category = categoryEl ? categoryEl.innerText.trim() : 'N/A';
           
           return {
-            likes: likesEl ? likesEl.innerText.trim() : 'N/A',
-            comentarios: commentsEl ? commentsEl.innerText.trim() : 'N/A',
-            categoria: categoryEl ? categoryEl.innerText.trim() : 'N/A'
+            likes,
+            likesNumber,
+            comentarios: comments,
+            comentariosNumber: commentsNumber,
+            descricao: description,
+            categoria: category
           };
         });
 
+        // Atualizar dados do vídeo
         video.likes = extraInfo.likes;
+        video.likesNumero = extraInfo.likesNumber;
         video.comentarios = extraInfo.comentarios;
+        video.comentariosNumero = extraInfo.commentsNumber;
+        video.descricao = extraInfo.descricao;
         video.categoria = extraInfo.categoria;
 
         // Calcular métricas
         if (video.publicadoEm && video.visualizacoesNumero) {
           const diasDesdePublicacao = moment().diff(moment(video.publicadoEm), 'days') || 1;
           video.metricas.visualizacoesPorDia = Math.round(video.visualizacoesNumero / diasDesdePublicacao);
+          
+          // Calcular taxa de engajamento (likes + comentários) / visualizações * 100
+          const engajamentoTotal = (video.likesNumero + video.comentariosNumero);
+          video.metricas.engajamento = video.visualizacoesNumero > 0 ? 
+            ((engajamentoTotal / video.visualizacoesNumero) * 100).toFixed(2) + '%' : '0%';
         }
+
+        // Aguardar um pouco entre requisições para evitar bloqueio
+        await page.waitForTimeout(1000);
       } catch (err) {
         console.error(`Erro ao enriquecer dados do vídeo ${video.link}:`, err);
       }

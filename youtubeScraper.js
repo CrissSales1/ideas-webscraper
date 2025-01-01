@@ -117,67 +117,113 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
 
     // Extrair dados mais detalhados dos vídeos
     const videos = await page.evaluate((maxVideos) => {
+      function extractViews(element) {
+        if (!element) return { text: '0', number: 0 };
+        const text = element.innerText.trim();
+        const match = text.match(/(\d+(?:\.\d+)?[KMB]?)\s*views?/i);
+        if (!match) return { text: '0', number: 0 };
+        
+        const value = match[1];
+        let number = parseFloat(value.replace(/[KMB]/g, ''));
+        
+        if (value.includes('K')) number *= 1000;
+        if (value.includes('M')) number *= 1000000;
+        if (value.includes('B')) number *= 1000000000;
+        
+        return { text: text, number: Math.round(number) };
+      }
+
       const videoElements = Array.from(document.querySelectorAll('ytd-video-renderer')).slice(0, maxVideos);
       
       return videoElements.map(videoEl => {
         try {
+          // Seletores principais
           const titleEl = videoEl.querySelector('#video-title');
-          const viewsEl = videoEl.querySelector('#metadata-line span:first-child');
-          const thumbnailEl = videoEl.querySelector('#thumbnail img');
-          const channelEl = videoEl.querySelector('#channel-name a, #text-container a');
+          const viewsEl = videoEl.querySelector('#metadata-line span');
+          const channelEl = videoEl.querySelector('#channel-name a, #text-container a, #channel-name');
           const durationEl = videoEl.querySelector('span.ytd-thumbnail-overlay-time-status-renderer');
           const publishedEl = videoEl.querySelector('#metadata-line span:last-child');
-          const descriptionEl = videoEl.querySelector('#description-text, #description');
+          const thumbnailEl = videoEl.querySelector('#thumbnail img[src]');
           const badgeEl = videoEl.querySelector('ytd-badge-supported-renderer');
           
-          // Extrair hashtags do título
+          // Processamento do título e hashtags
           const title = titleEl ? titleEl.innerText.trim() : 'N/A';
-          const hashtags = title.match(/#\w+/g) || [];
+          const hashtags = (title.match(/#\w+/g) || []).concat(
+            ((videoEl.querySelector('#description-text') || {}).innerText || '')
+              .match(/#\w+/g) || []
+          );
+
+          // Processamento de visualizações
+          const views = extractViews(viewsEl);
           
-          // Processar visualizações para número
-          const viewsText = viewsEl ? viewsEl.innerText.trim() : '0';
-          const viewsNumber = parseInt(viewsText.replace(/[^0-9]/g, '')) || 0;
-          
-          // Processar data de publicação
+          // Processamento de thumbnail
+          let thumbnailUrl = '';
+          if (thumbnailEl) {
+            thumbnailUrl = thumbnailEl.src;
+            if (thumbnailUrl.startsWith('data:')) {
+              thumbnailUrl = thumbnailEl.dataset.thumbnailUrl || thumbnailEl.dataset.thumb || '';
+            }
+            // Se ainda estiver vazio, tentar construir a URL da thumbnail
+            if (!thumbnailUrl && titleEl && titleEl.href) {
+              const videoId = titleEl.href.match(/(?:v=|\/)([\w-]{11})(?:\?|&|\/|$)/);
+              if (videoId) {
+                thumbnailUrl = `https://i.ytimg.com/vi/${videoId[1]}/hqdefault.jpg`;
+              }
+            }
+          }
+
+          // Processamento do canal
+          const channelName = channelEl ? 
+            channelEl.innerText.trim() : 
+            videoEl.querySelector('#channel-name') ? 
+              videoEl.querySelector('#channel-name').innerText.trim() : 'N/A';
+
+          const channelLink = channelEl ? 
+            channelEl.href : 
+            channelName !== 'N/A' ? 
+              `https://www.youtube.com/c/${encodeURIComponent(channelName)}` : 'N/A';
+
+          // Processamento da data de publicação
           const publishedText = publishedEl ? publishedEl.innerText.trim() : '';
-          const publishedDate = publishedText.includes('há') ? 
-            moment().subtract(
-              parseInt(publishedText.match(/\d+/)[0]),
-              publishedText.includes('hora') ? 'hours' : 
-              publishedText.includes('dia') ? 'days' : 
-              publishedText.includes('semana') ? 'weeks' : 
-              publishedText.includes('mês') ? 'months' : 'years'
-            ).format('YYYY-MM-DD HH:mm:ss') : 
-            null;
-
-          // Processar thumbnail
-          const thumbnailSrc = thumbnailEl ? 
-            (thumbnailEl.src.startsWith('data:') ? thumbnailEl.dataset.thumbnailUrl : thumbnailEl.src) : 
-            'N/A';
-
-          // Processar nome do canal
-          const channelName = channelEl ? channelEl.innerText.trim() : 
-            (videoEl.querySelector('#channel-name') ? videoEl.querySelector('#channel-name').innerText.trim() : 'N/A');
+          let publishedDate = null;
+          
+          if (publishedText) {
+            const timeMatch = publishedText.match(/(\d+)\s*(minuto|hora|dia|semana|mês|mes|ano)s?\s+atrás/i);
+            if (timeMatch) {
+              const [_, amount, unit] = timeMatch;
+              const unitMap = {
+                'minuto': 'minutes',
+                'hora': 'hours',
+                'dia': 'days',
+                'semana': 'weeks',
+                'mês': 'months',
+                'mes': 'months',
+                'ano': 'years'
+              };
+              publishedDate = moment().subtract(parseInt(amount), unitMap[unit.toLowerCase()]).format('YYYY-MM-DD HH:mm:ss');
+            }
+          }
 
           return {
             titulo: title,
             link: titleEl ? titleEl.href : 'N/A',
-            visualizacoes: viewsText,
-            visualizacoesNumero: viewsNumber,
-            thumbnail: thumbnailSrc,
+            visualizacoes: views.text,
+            visualizacoesNumero: views.number,
+            thumbnail: thumbnailUrl,
             canal: {
               nome: channelName,
-              link: channelEl ? channelEl.href : 'N/A',
+              link: channelLink,
               verificado: !!badgeEl
             },
             duracao: durationEl ? durationEl.innerText.trim() : 'N/A',
             publicadoEm: publishedDate,
-            descricao: descriptionEl ? descriptionEl.innerText.trim() : 'N/A',
-            hashtags: hashtags,
+            descricao: videoEl.querySelector('#description-text') ? 
+              videoEl.querySelector('#description-text').innerText.trim() : 'N/A',
+            hashtags: [...new Set(hashtags)], // Remove duplicatas
             categoria: 'N/A',
             metricas: {
               visualizacoesPorDia: 0,
-              engajamento: 0
+              engajamento: '0%'
             }
           };
         } catch (err) {
@@ -202,18 +248,30 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
         await page.waitForSelector('ytd-watch-metadata', { timeout: 10000 });
         
         const extraInfo = await page.evaluate(() => {
-          // Função helper para extrair números
-          const extractNumber = (text) => parseInt(text.replace(/[^0-9]/g, '')) || 0;
-          
+          function extractNumber(text) {
+            if (!text) return 0;
+            const match = text.match(/(\d+(?:\.\d+)?[KMB]?)/i);
+            if (!match) return 0;
+            
+            const value = match[1];
+            let number = parseFloat(value.replace(/[KMB]/g, ''));
+            
+            if (value.includes('K')) number *= 1000;
+            if (value.includes('M')) number *= 1000000;
+            if (value.includes('B')) number *= 1000000000;
+            
+            return Math.round(number);
+          }
+
           // Coletar likes
           const likesEl = document.querySelector('#top-level-buttons-computed ytd-toggle-button-renderer:first-child #text');
           const likes = likesEl ? likesEl.innerText.trim() : 'N/A';
-          const likesNumber = likesEl ? extractNumber(likes) : 0;
+          const likesNumber = extractNumber(likes);
           
           // Coletar comentários
           const commentsEl = document.querySelector('#comments #count .count-text');
           const comments = commentsEl ? commentsEl.innerText.trim() : 'N/A';
-          const commentsNumber = commentsEl ? extractNumber(comments) : 0;
+          const commentsNumber = extractNumber(comments);
           
           // Coletar descrição completa
           const descriptionEl = document.querySelector('#description-inline-expander, #description');
@@ -222,6 +280,11 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
           // Coletar categoria
           const categoryEl = document.querySelector('ytd-metadata-row-renderer:has(#title yt-formatted-string:contains("Categoria")) #content');
           const category = categoryEl ? categoryEl.innerText.trim() : 'N/A';
+
+          // Coletar visualizações novamente (pode ser mais preciso na página do vídeo)
+          const viewsEl = document.querySelector('#info #count .view-count');
+          const views = viewsEl ? viewsEl.innerText.trim() : null;
+          const viewsNumber = extractNumber(views);
           
           return {
             likes,
@@ -229,7 +292,9 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
             comentarios: comments,
             comentariosNumber: commentsNumber,
             descricao: description,
-            categoria: category
+            categoria: category,
+            visualizacoes: views,
+            visualizacoesNumero: viewsNumber
           };
         });
 
@@ -241,8 +306,14 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
         video.descricao = extraInfo.descricao;
         video.categoria = extraInfo.categoria;
 
+        // Atualizar visualizações se os novos dados forem mais precisos
+        if (extraInfo.visualizacoesNumero > 0) {
+          video.visualizacoes = extraInfo.visualizacoes;
+          video.visualizacoesNumero = extraInfo.visualizacoesNumero;
+        }
+
         // Calcular métricas
-        if (video.publicadoEm && video.visualizacoesNumero) {
+        if (video.publicadoEm && video.visualizacoesNumero > 0) {
           const diasDesdePublicacao = moment().diff(moment(video.publicadoEm), 'days') || 1;
           video.metricas.visualizacoesPorDia = Math.round(video.visualizacoesNumero / diasDesdePublicacao);
           
@@ -253,7 +324,7 @@ async function buscarVideos(keyword, maxVideos = 10, options = {}) {
         }
 
         // Aguardar um pouco entre requisições para evitar bloqueio
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1500);
       } catch (err) {
         console.error(`Erro ao enriquecer dados do vídeo ${video.link}:`, err);
       }

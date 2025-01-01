@@ -1,7 +1,8 @@
 FROM node:18
 
-# Instalar dependências do sistema necessárias para o Puppeteer e Chrome
+# Instalar dependências do sistema necessárias para o Puppeteer, Chrome e Redis
 RUN apt-get update && apt-get install -y \
+    redis-server \
     wget \
     gnupg \
     libnss3 \
@@ -30,13 +31,16 @@ RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key
 WORKDIR /app
 
 # Copiar arquivos do projeto
-COPY . .
-
-# Instalar dependências do Node.js
+COPY package*.json ./
 RUN npm install
 
-# Expor a porta do servidor
+COPY . .
+
+# Expor porta
 EXPOSE 3000
 
-# Comando de inicialização
-CMD ["npm", "start"]
+# Script de inicialização
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
+CMD ["/start.sh"]

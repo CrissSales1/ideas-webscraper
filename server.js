@@ -8,18 +8,38 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 app.post('/youtube', async (req, res) => {
-  const { keyword, maxVideos } = req.body;
+  const { keyword, maxVideos, minDuration, maxDuration, dateFilter } = req.body;
 
   if (!keyword) {
     return res.status(400).json({ error: 'Palavra-chave (keyword) é obrigatória.' });
   }
 
   try {
-    const videos = await buscarVideos(keyword, maxVideos || 10);
-    res.json({ message: 'Busca concluída com sucesso!', videos });
+    const result = await buscarVideos(keyword, maxVideos || 10, {
+      minDuration,
+      maxDuration,
+      dateFilter
+    });
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: 'Erro ao realizar a busca no YouTube.',
+        details: result.error
+      });
+    }
+
+    res.json({
+      message: 'Busca concluída com sucesso!',
+      total: result.total,
+      query: result.query,
+      videos: result.data
+    });
   } catch (err) {
     console.error('Erro durante a raspagem do YouTube:', err);
-    res.status(500).json({ error: 'Erro ao realizar a busca no YouTube.' });
+    res.status(500).json({
+      error: 'Erro ao realizar a busca no YouTube.',
+      details: err.message
+    });
   }
 });
 
